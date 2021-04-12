@@ -1,14 +1,14 @@
 #include "convolve.h"
 
-__global__ void _convolve(float* img, int img_w, int img_h, float* kernel, int kernel_w, int kernel_h, float* output) {
+__global__ void _convolve(const float* __restrict__ img, int img_w, int img_h,const float* __restrict__ kernel, int kernel_w, int kernel_h, float* __restrict__ output) {
 }
 
 template<int kernel_w, int kernel_h>
  void Convolve<kernel_w, kernel_h>::doConvolve(float* img, int img_w, int img_h, float* output) {
 	// Requires that img and output are cudaMalloc'd by caller
-	dim3 blockSize(32, 32);
+	const dim3 blockSize(32, 32);
 	// Make Gridsize
-	dim3 gridDims((img_w + blockSize.x - 1) / blockSize.x,
+	const dim3 gridDims((img_w + blockSize.x - 1) / blockSize.x,
                  (img_h + blockSize.y - 1) / blockSize.y);
                  
 	_convolve<<<gridDims, blockSize>>>(img, img_w, img_h, kernel, kernel_w, kernel_h, output);
