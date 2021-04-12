@@ -7,6 +7,9 @@
 // Drivers for the camera and OpenCV are included in the base image
 
 #include <opencv2/opencv.hpp>
+#include "grayscale.h"
+#include <cuda_runtime.h>
+#include <cuda.h>
 
 std::string gstreamer_pipeline (int capture_width, int capture_height, int display_width, int display_height, int framerate, int flip_method) {
     return "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=(int)" + std::to_string(capture_width) + ", height=(int)" +
@@ -17,8 +20,8 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int displ
 
 int main()
 {
-    int capture_width = 1920;
-    int capture_height = 1080 ;
+    int capture_width = 1280;
+    int capture_height = 720 ;
     int display_width = 1280 ;
     int display_height = 720 ;
     int framerate = 30 ;
