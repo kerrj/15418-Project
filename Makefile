@@ -1,6 +1,6 @@
 EXECUTABLE := uwu
 
-CU_FILES   := grayscale.cu
+CU_FILES   := grayscale.cu convolve.cu
 
 CU_DEPS    :=
 
@@ -15,7 +15,7 @@ LDFLAGS= -L/usr/lib -lopencv_core -lopencv_highgui -lopencv_videoio -L/usr/local
 NVCC=nvcc
 NVCCFLAGS=-O3 -ccbin /usr/bin/g++
 
-OBJS=$(OBJDIR)/grayscale.o
+OBJS=$(OBJDIR)/grayscale.o $(OBJDIR)/convolve.o
 
 all: $(EXECUTABLE)
 
