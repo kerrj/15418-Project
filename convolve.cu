@@ -1,6 +1,21 @@
 #include "convolve.h"
 
 __global__ void _convolve(const float* __restrict__ img, int img_w, int img_h,const float* __restrict__ kernel, int kernel_w, int kernel_h, float* __restrict__ output) {
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+	
+	if(x - (kernel_w/2) < 0 || x + (kernel_w/2) >= img_w) return;
+	if(y - (kernel_h/2) < 0 || y + (kernel_h/2) >= img_h) return;
+	
+	float val = 0.0;
+	for(int r = 0; r < kernel_h; r++) {
+		int newy = y + r - (kernel_h / 2);
+		for(int c = 0; c < kernel_w; c++) {
+			int newx = x + c - (kernel_w / 2);
+			val += kernel[r*kernel_w + c] * img[newy*img_w + newx];
+		}
+	}
+	output[img_w * y + x] = val;
 }
 
 template<int kernel_w, int kernel_h>

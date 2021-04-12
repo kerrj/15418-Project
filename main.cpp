@@ -9,6 +9,7 @@
 #include <opencv2/opencv.hpp>
 #include "grayscale.h"
 #include "convolve.h"
+#include "harris.h"
 #include <cuda_runtime.h>
 #include <cuda.h>
 #include <vector>
@@ -35,10 +36,6 @@ inline void cudaAssert(cudaError_t code, const char*file, int line, bool abort=t
 }
 
 std::string gstreamer_pipeline (int capture_width, int capture_height, int framerate) {
-    /*return "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=(int)" + std::to_string(capture_width) + ", height=(int)" +
-           std::to_string(capture_height) + ", format=(string)NV12, framerate=(fraction)" + std::to_string(framerate) +
-           "/1 ! nvvidconv flip-method=" + std::to_string(flip_method) + " ! video/x-raw, width=(int)" + std::to_string(display_width) + ", height=(int)" +
-           std::to_string(display_height) + ", format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";*/
      return "nvarguscamerasrc ! video/x-raw(memory:NVMM), width="+std::to_string(capture_width)+",height="+std::to_string(capture_height)+",format=NV12,framerate="+std::to_string(framerate)+"/1 ! nvvidconv ! video/x-raw,format=GRAY8 ! appsink";
 }
 
@@ -81,12 +78,20 @@ int main()
     float* floatBuf3;
     cudaMalloc(&floatBuf3, sizeof(float)*capture_height*capture_width);
     
+    char* charBuf;
+    cudaMalloc(&charBuf, sizeof(char)*capture_height*capture_width);
+    
     //instantiate GPU objects
-    float sobelX[9] = {1.0, 2.0, 1.0, 0.0, 0.0, 0.0, -1.0, -2.0, -1.0};
+    float jasmineBlur[9] = {0.1, 0.1, 0.1, 0.1, 0, 0.1, 0.1, 0.1, 0.1};
+    Convolve<3, 3> blur(jasmineBlur);
+    
+    float sobelX[9] = {1.0, 0.0, -1.0, 2.0, 0.0, -2.0, 1.0, 0.0, -1.0};
     Convolve<3, 3> gradX(sobelX);
     
-    float sobelY[9] = {1.0, 0.0, -1.0, 2.0, 0.0, -2.0, 1.0, 0.0, -1.0};
+    float sobelY[9] = {1.0, 2.0, 1.0, 0.0, 0.0, 0.0, -1.0, -2.0, -1.0};
     Convolve<3, 3> gradY(sobelY);
+    double gradAvg=0;
+    int n=0;
     while(true)
     {
     	auto start=tic();
@@ -107,25 +112,33 @@ int main()
 		
 		// Begin convolution
 		t=tic();
-		cudaMemcpy(grayBuf, gray.ptr(), gray.rows*gray.cols,cudaMemcpyHostToDevice);
+		cudaMemcpy(grayBuf, gray.ptr(), sizeof(float)*gray.rows*gray.cols,cudaMemcpyHostToDevice);
 		toc("opencv->cuda",t);
 		t=tic();
+		//blur.doConvolve(grayBuf, img.cols, img.rows, floatBuf2);
 		gradX.doConvolve(grayBuf, img.cols, img.rows, floatBuf2);
 		gradY.doConvolve(grayBuf, img.cols, img.rows, floatBuf3);
 		cudaCheckError(cudaDeviceSynchronize());
-		toc("gradients",t);
+		gradAvg+=toc("gradients",t);
+		n++;
+		
+		// Do Harris Corners
+		harris(floatBuf2, floatBuf3, img.cols, img.rows, grayBuf, charBuf);
+		cudaCheckError(cudaDeviceSynchronize());
 		
 		// Copy to display
 		t=tic();
-		cv::Mat matt(img.rows,img.cols,CV_32F);
-		cudaMemcpy(matt.ptr(), grayBuf, sizeof(float)*img.rows*img.cols, 
-				cudaMemcpyDeviceToHost);
+		cv::Mat matt(img.rows,img.cols,CV_8UC1); //CV_32F);
+		//cudaMemcpy(matt.ptr(), grayBuf, sizeof(float)*gray.rows*gray.cols, 
+		//		cudaMemcpyDeviceToHost);
+		cudaMemcpy(matt.ptr(), charBuf, sizeof(char)*img.rows*img.cols, cudaMemcpyDeviceToHost);
 		toc("cuda->opencv",t);
-		cv::imshow("CSI Camera",gray);
+		cv::imshow("CSI Camera",matt);
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
 		toc("total",start);
     }
+    printf("Convolve average compute time: %f\n",gradAvg/n);
     cap.release();
     cv::destroyAllWindows() ;
     return 0;
