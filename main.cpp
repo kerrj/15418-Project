@@ -20,8 +20,8 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int displ
 
 int main()
 {
-    int capture_width = 1280;
-    int capture_height = 720 ;
+    int capture_width = 1920;
+    int capture_height = 1080 ;
     int display_width = 1280 ;
     int display_height = 720 ;
     int framerate = 30 ;
@@ -45,12 +45,17 @@ int main()
     cv::Mat img;
 
     std::cout << "Hit ESC to exit" << "\n" ;
+    uint8_t* imgBuf;
+    cudaMalloc(&imgBuf,img.rows*img.cols);
+    float* floatBuf;
+    cudaMalloc(&floatBuf,sizeof(float)*img.rows*img.cols);
     while(true)
     {
     	if (!cap.read(img)) {
 		std::cout<<"Capture read error"<<std::endl;
 		break;
 	}
+	im2gray(imgBuf,10,floatBuf,dim3(10,10),dim3(10,10));
 	cv::imshow("CSI Camera",img);
 	int keycode = cv::waitKey(30) & 0xff ; 
         if (keycode == 27) break ;
