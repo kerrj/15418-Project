@@ -82,8 +82,8 @@ int main()
     cudaMalloc(&charBuf, sizeof(char)*capture_height*capture_width);
     
     //instantiate GPU objects
-    float jasmineBlur[9] = {0.1, 0.1, 0.1, 0.1, 0, 0.1, 0.1, 0.1, 0.1};
-    Convolve<3, 3> blur(jasmineBlur);
+    //float jasmineBlur[9] = {0.1, 0.1, 0.1, 0.1, 0, 0.1, 0.1, 0.1, 0.1};
+    //Convolve<3, 3> blur(jasmineBlur);
     
     float sobelX[9] = {1.0, 0.0, -1.0, 2.0, 0.0, -2.0, 1.0, 0.0, -1.0};
     Convolve<3, 3> gradX(sobelX);
@@ -94,51 +94,46 @@ int main()
     int n=0;
     while(true)
     {
-    	auto start=tic();
-    	printf("\n");
+    	//auto start=tic();
     	if (!cap.read(img)) {
 			std::cout<<"Capture read error"<<std::endl;
 			break;
 		}
-		printf("Image size: %d,%d\n",img.cols,img.rows);
-		toc("read img",start);
+		//printf("Image size: %d,%d\n",img.cols,img.rows);
 		
 		// Begin grayscale
 		auto t=tic();
 		cv::Mat gray;
 		img.convertTo(gray,CV_32F,1/255.0);
-		toc("grayscale",t);
 		// End grayscale
 		
 		// Begin convolution
 		t=tic();
 		cudaMemcpy(grayBuf, gray.ptr(), sizeof(float)*gray.rows*gray.cols,cudaMemcpyHostToDevice);
-		toc("opencv->cuda",t);
-		t=tic();
-		//blur.doConvolve(grayBuf, img.cols, img.rows, floatBuf2);
+		//toc("opencv->cuda",t);
 		gradX.doConvolve(grayBuf, img.cols, img.rows, floatBuf2);
 		gradY.doConvolve(grayBuf, img.cols, img.rows, floatBuf3);
 		cudaCheckError(cudaDeviceSynchronize());
-		gradAvg+=toc("gradients",t);
+		//gradAvg+=toc("gradients",t);
 		n++;
 		
 		// Do Harris Corners
 		harris(floatBuf2, floatBuf3, img.cols, img.rows, grayBuf, charBuf);
 		cudaCheckError(cudaDeviceSynchronize());
-		
+		gradAvg+=toc("harris",t);
 		// Copy to display
-		t=tic();
-		cv::Mat matt(img.rows,img.cols,CV_8UC1); //CV_32F);
+		//cv::Mat matt(img.rows,img.cols,CV_32F);
 		//cudaMemcpy(matt.ptr(), grayBuf, sizeof(float)*gray.rows*gray.cols, 
 		//		cudaMemcpyDeviceToHost);
+		cv::Mat matt(img.rows,img.cols,CV_8UC1);
 		cudaMemcpy(matt.ptr(), charBuf, sizeof(char)*img.rows*img.cols, cudaMemcpyDeviceToHost);
-		toc("cuda->opencv",t);
+		//toc("cuda->opencv",t);
 		cv::imshow("CSI Camera",matt);
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
-		toc("total",start);
+		//toc("total",start);
     }
-    printf("Convolve average compute time: %f\n",gradAvg/n);
+    printf("Average compute time: %f\n",gradAvg/n);
     cap.release();
     cv::destroyAllWindows() ;
     return 0;

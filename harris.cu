@@ -1,6 +1,7 @@
 #include "harris.h"
 
 const int window = 3;
+
 __global__ void _harrisActivation(const float* __restrict__ gradX, const float* __restrict__ gradY, int img_w, int img_h, float* __restrict__ output) {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;
 	int y = blockDim.y * blockIdx.y + threadIdx.y;
@@ -22,28 +23,34 @@ __global__ void _harrisActivation(const float* __restrict__ gradX, const float* 
 	}
 	// Compute R = det(M) - k * tr(M)^2
 	const float det = val.x * val.y - val.z * val.z;
-	output[img_w * y + x] = det - 0.04 * (val.x + val.y) * (val.x + val.y);	
+	const float R=det - 0.06 * (val.x + val.y) * (val.x + val.y);	
+	if(R>0.5){
+		output[img_w * y + x] = R;
+	}else{
+		output[img_w * y + x] = 0;
+	}
 }
 
+const int nmswindow=5;
 __global__ void _nms(const float* __restrict__ activations, int img_w, int img_h, char* __restrict__ output) {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;
 	int y = blockDim.y * blockIdx.y + threadIdx.y;
 	
-	if(x - (window/2) < 0 || x + (window/2) >= img_w) return;
-	if(y - (window/2) < 0 || y + (window/2) >= img_h) return;
+	if(x - (nmswindow/2) < 0 || x + (nmswindow/2) >= img_w) return;
+	if(y - (nmswindow/2) < 0 || y + (nmswindow/2) >= img_h) return;
 	
 	const float val = activations[y*img_w + x];
 	
 	// TODO: Figure out activation threshold	
-	if(val < 0.2) {
+	if(val < 0.001) {
 		output[y*img_w + x] = 0;
 		return; 
 	}
 	output[y*img_w + x] = 255; // Setting to 255 for visualization (could change to 1)
-	for(int r = 0; r < window; r++) {
-		int newy = y + r - (window / 2);
-		for(int c = 0; c < window; c++) {
-			int newx = x + c - (window / 2);
+	for(int r = 0; r < nmswindow; r++) {
+		int newy = y + r - (nmswindow / 2);
+		for(int c = 0; c < nmswindow; c++) {
+			int newx = x + c - (nmswindow / 2);
 			const float newVal = activations[newy*img_w + newx];
 			// Set to 0 if there exists a higher-activation neighbor
 			if(newVal > val) {
