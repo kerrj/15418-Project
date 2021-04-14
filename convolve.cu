@@ -32,3 +32,10 @@ template<int kernel_w, int kernel_h>
 //um wait holdon
 //forward declare the templates we will need later
 template class Convolve<3,3>;
+template class Convolve<5,5>;
+template class Convolve<5,1>;
+template class Convolve<1,5>;
+template class Convolve<9,1>;
+template class Convolve<1,9>;
+template class Convolve<3,1>;
+template class Convolve<1,3>;

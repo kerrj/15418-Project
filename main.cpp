@@ -7,6 +7,7 @@
 // Drivers for the camera and OpenCV are included in the base image
 
 #include <opencv2/opencv.hpp>
+#include <opencv2/imgproc.hpp>
 #include "grayscale.h"
 #include "convolve.h"
 #include "harris.h"
@@ -42,13 +43,24 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int frame
 // Camera Params
 const int capture_width = 1280;
 const int capture_height = 720 ;
-const int framerate = 30 ;
+const int framerate = 20 ;
 
 
 // Kernel for grayscale
 const dim3 grayBlockSize(32);
 const dim3 grayGridSize((capture_height*capture_width+grayBlockSize.x - 1)/grayBlockSize.x);
-    
+ 
+static inline int nextPow2(int n)
+{
+    n--;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n++;
+    return n;
+}  
     
 int main()
 {
@@ -69,8 +81,8 @@ int main()
     // End open camera stream
     
     // Malloc stuff for kernels
-    float* grayBuf;
-    cudaMalloc(&grayBuf,sizeof(float)*capture_height*capture_width);
+    float* floatBuf1;
+    cudaMalloc(&floatBuf1,sizeof(float)*capture_height*capture_width);
     
     float* floatBuf2;
     cudaMalloc(&floatBuf2, sizeof(float)*capture_height*capture_width);
@@ -81,9 +93,17 @@ int main()
     char* charBuf;
     cudaMalloc(&charBuf, sizeof(char)*capture_height*capture_width);
     
+    unsigned short* shortBuf1;
+    cudaMalloc(&shortBuf1, sizeof(short)*nextPow2(capture_height*capture_width));
+    
+    unsigned short* shortBuf2;
+    cudaMalloc(&shortBuf2, sizeof(short)*capture_height*capture_width);
+    
     //instantiate GPU objects
-    //float jasmineBlur[9] = {0.1, 0.1, 0.1, 0.1, 0, 0.1, 0.1, 0.1, 0.1};
-    //Convolve<3, 3> blur(jasmineBlur);
+    const int blurSize = 3;
+    cv::Mat blurKern = cv::getGaussianKernel(blurSize,2,CV_32F);
+    Convolve<1, blurSize> blurX((float*)blurKern.ptr());
+    Convolve<blurSize, 1> blurY((float*)blurKern.ptr());
     
     float sobelX[9] = {1.0, 0.0, -1.0, 2.0, 0.0, -2.0, 1.0, 0.0, -1.0};
     Convolve<3, 3> gradX(sobelX);
@@ -106,29 +126,39 @@ int main()
 		cv::Mat gray;
 		img.convertTo(gray,CV_32F,1/255.0);
 		// End grayscale
+		//copy memory to cuda land
+		cudaMemcpy(floatBuf1, gray.ptr(), sizeof(float)*gray.rows*gray.cols,cudaMemcpyHostToDevice);
 		
+		//blur the image
+		blurX.doConvolve(floatBuf1,img.cols,img.rows,floatBuf2);
+		blurY.doConvolve(floatBuf2,img.cols,img.rows,floatBuf1);
 		// Begin convolution
 		t=tic();
-		cudaMemcpy(grayBuf, gray.ptr(), sizeof(float)*gray.rows*gray.cols,cudaMemcpyHostToDevice);
 		//toc("opencv->cuda",t);
-		gradX.doConvolve(grayBuf, img.cols, img.rows, floatBuf2);
-		gradY.doConvolve(grayBuf, img.cols, img.rows, floatBuf3);
-		cudaCheckError(cudaDeviceSynchronize());
+		gradX.doConvolve(floatBuf1, img.cols, img.rows, floatBuf2);
+		gradY.doConvolve(floatBuf1, img.cols, img.rows, floatBuf3);
+		//cudaCheckError(cudaDeviceSynchronize());
 		//gradAvg+=toc("gradients",t);
 		n++;
 		
 		// Do Harris Corners
-		harris(floatBuf2, floatBuf3, img.cols, img.rows, grayBuf, charBuf);
-		cudaCheckError(cudaDeviceSynchronize());
+		harris(floatBuf2, floatBuf3, img.cols, img.rows, floatBuf1, shortBuf1);
+		
+		// Do Scan. Input: activations. Output: int array with scanned count.
+		scan(shortBuf1, img.cols * img.rows);
+		// Collapse to # of corners. Input: scan results + activations, size img. Output: 1 int array for locations, 1 float array for activations, size # of corners
+		//collapse(shortBuf1, floatBuf1, img.cols * img.rows, shortBuf2, floatBuf2);
+		
+		
+		// cudaCheckError(cudaDeviceSynchronize());
 		gradAvg+=toc("harris",t);
 		// Copy to display
 		//cv::Mat matt(img.rows,img.cols,CV_32F);
-		//cudaMemcpy(matt.ptr(), grayBuf, sizeof(float)*gray.rows*gray.cols, 
-		//		cudaMemcpyDeviceToHost);
-		cv::Mat matt(img.rows,img.cols,CV_8UC1);
-		cudaMemcpy(matt.ptr(), charBuf, sizeof(char)*img.rows*img.cols, cudaMemcpyDeviceToHost);
+		//cudaMemcpy(matt.ptr(), floatBuf1, sizeof(float)*gray.rows*gray.cols, cudaMemcpyDeviceToHost);
+		cv::Mat matt(img.rows,img.cols,CV_16UC1);
+		cudaMemcpy(matt.ptr(), shortBuf1, sizeof(short)*img.rows*img.cols, cudaMemcpyDeviceToHost);
 		//toc("cuda->opencv",t);
-		cv::imshow("CSI Camera",matt);
+		cv::imshow("CSI Camera", (2 << 3) * matt);
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
 		//toc("total",start);
