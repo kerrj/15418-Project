@@ -66,7 +66,6 @@ __global__ void _nms(const float* __restrict__ activations, int img_w, int img_h
 			const float newVal = activations[newy*img_w + newx];
 			// Returns since value is 0 if there exists a higher-activation neighbor
 			if(newVal > val) {
-				
 				return;
 			}
 		}
@@ -75,28 +74,30 @@ __global__ void _nms(const float* __restrict__ activations, int img_w, int img_h
 }
 
 __global__
-void scan_down_kernel(unsigned short* device_data, int size) {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
+void scan_down_kernel(unsigned short* device_data, int size, int device_data_size_of_array_yes_sir_not_the_previous_size) {
+    const int index = (blockIdx.x * blockDim.x + threadIdx.x+1) * size - 1;
     // Check if index is going to be written to at this level
-    if(index % size == size - 1) {
+    if(index < device_data_size_of_array_yes_sir_not_the_previous_size) {
+    //int index = blockIdx.x * blockDim.x + threadIdx.x;
+    //if(index%size == size-1){
         // Get the index it will be combined with (halfway) 
-        int j = index - (size >> 1);
+        const int j = index - (size >> 1);
         device_data[index] = device_data[index] + device_data[j];
     }
 }
 
 __global__
-void scan_up_kernel(unsigned short* device_data, int size) {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if(index % size == size - 1) {
-        int j = index - (size >> 1);
-        unsigned short original = device_data[index];
+void scan_up_kernel(unsigned short* device_data, int size, int device_data_size_of_array_yes_sir_not_the_previous_size) {
+    //int index = blockIdx.x * blockDim.x + threadIdx.x;
+    const int index = (blockIdx.x * blockDim.x + threadIdx.x+1) * size - 1;
+    // if(index % size == size - 1) {
+    if(index<device_data_size_of_array_yes_sir_not_the_previous_size){
+        const int j = index - (size >> 1);
+        const short original = device_data[index];
         device_data[index] += device_data[j];
         device_data[j] = original;
     }
 }
-
 
 
 __global__ void _collapse(const unsigned short* __restrict__ scanResult, const float* __restrict__ activations, int size, unsigned short* __restrict__ locations, float* __restrict__ outputActivations) {
@@ -125,18 +126,21 @@ void harris(float* gradX, float* gradY, int img_w, int img_h, float* activations
 
 void scan(unsigned short* device_data, int length)
 {
-    /* Taken from assignment 2 */
     const int threadsPerBlock = 128;
-    const int blocks = (nextPow2(length) + threadsPerBlock - 1) / threadsPerBlock;
-
+    const int length_nextPow2 = nextPow2(length);
     int i = 2;
-    for (; i < nextPow2(length); i=(i<<1)) {
-        scan_down_kernel<<<blocks, threadsPerBlock>>>(device_data, i);
+    for (; i < length_nextPow2; i=(i<<1)) {
+        const size_t n = length_nextPow2/i;//num elements to compute
+        const int blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
+        scan_down_kernel<<<blocks, threadsPerBlock>>>(device_data, i, length_nextPow2);
     }
-    unsigned short x = 0;
-    cudaMemcpy(&device_data[nextPow2(length)-1], &x, sizeof(short), cudaMemcpyHostToDevice);
+    const short x = 0;
+    cudaMemcpy(&device_data[length_nextPow2-1], &x, sizeof(short), cudaMemcpyHostToDevice);
     for(; i > 1; i=(i>>1)) {
-        scan_up_kernel<<<blocks, threadsPerBlock>>>(device_data, i);
+        const size_t n = length_nextPow2/i;//num elements to compute
+        const int blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
+        //const int blocks = (length_nextPow2 + threadsPerBlock - 1) / threadsPerBlock;
+        scan_up_kernel<<<blocks, threadsPerBlock>>>(device_data, i,length_nextPow2);
     }
 }
 
