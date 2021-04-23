@@ -54,8 +54,8 @@ __global__ void _nms(const float* __restrict__ activations, int img_w, int img_h
 	int y = blockDim.y * blockIdx.y + threadIdx.y;
 	
 	threshold_output[y*img_w + x] = 0;
-	if(x - (nmswindow/2) < 0 || x + (nmswindow/2) >= img_w) return;
-	if(y - (nmswindow/2) < 0 || y + (nmswindow/2) >= img_h) return;
+	if(x - (window/2) < 0 || x + (window/2) >= img_w) return;
+	if(y - (window/2) < 0 || y + (window/2) >= img_h) return;
 	
 	const float val = activations[y*img_w + x];
 	if(val < 0.001) return;
@@ -100,7 +100,7 @@ void scan_up_kernel(unsigned short* device_data, int size, int device_data_size_
 }
 
 
-__global__ void _collapse(const unsigned short* __restrict__ scanResult, const float* __restrict__ activations, int size, unsigned short* __restrict__ locations, float* __restrict__ outputActivations) {
+__global__ void _collapse(const unsigned short* __restrict__ scanResult, const float* __restrict__ activations, int size, unsigned int* __restrict__ locations, float* __restrict__ outputActivations) {
 	const int index = blockIdx.x*blockDim.x + threadIdx.x + 1;
     if(index>=size)return;
     if(scanResult[index]>scanResult[index-1]){
@@ -145,9 +145,9 @@ void scan(unsigned short* device_data, int length)
 }
 
 
-void collapse(const unsigned short* scanResult, const float* activations, int size, unsigned short* locations, float* outputActivations) {
+void collapse(const unsigned short* scanResult, const float* activations, int size, unsigned int* locations, float* outputActivations) {
 	const int threadsPerBlock = 128;
-	const int blocks = size;
+	const int blocks = (size + threadsPerBlock - 1) / threadsPerBlock;
 	_collapse<<<blocks, threadsPerBlock>>>(scanResult, activations, size, locations, outputActivations);
 	
 }

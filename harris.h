@@ -8,7 +8,7 @@ void harris(float* gradX, float* gradY, int img_w, int img_h, float* activations
 
 void scan(unsigned short* output, int size);
 
-void collapse(const unsigned short* scanResult, const float* activations, int size, unsigned short* locations, float* outputActivations);
+void collapse(const unsigned short* scanResult, const float* activations, int size, unsigned int* locations, float* outputActivations);
 
 #endif
 

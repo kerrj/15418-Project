@@ -11,6 +11,7 @@
 #include "grayscale.h"
 #include "convolve.h"
 #include "harris.h"
+#include "brief.h"
 #include <cuda_runtime.h>
 #include <cuda.h>
 #include <vector>
@@ -44,6 +45,7 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int frame
 const int capture_width = 1280;
 const int capture_height = 720 ;
 const int framerate = 20 ;
+const int NUM_CORNERS = 1000;//TODO make this fill the GPU
 
 
 // Kernel for grayscale
@@ -84,20 +86,24 @@ int main()
     float* floatBuf1;
     cudaMalloc(&floatBuf1,sizeof(float)*capture_height*capture_width);
     
+    float* blurBuf;
+    cudaMalloc(&blurBuf,sizeof(float)*capture_height*capture_width);
+    
     float* floatBuf2;
     cudaMalloc(&floatBuf2, sizeof(float)*capture_height*capture_width);
     
     float* floatBuf3;
     cudaMalloc(&floatBuf3, sizeof(float)*capture_height*capture_width);
     
-    char* charBuf;
-    cudaMalloc(&charBuf, sizeof(char)*capture_height*capture_width);
+    char* featureBuf;
+    cudaMalloc(&featureBuf, sizeof(char)*NUM_CORNERS*(CHARS_PER_BRIEF));
     
     unsigned short* shortBuf1;
     cudaMalloc(&shortBuf1, sizeof(short)*nextPow2(capture_height*capture_width));
     
-    unsigned short* shortBuf2;
-    cudaMalloc(&shortBuf2, sizeof(short)*capture_height*capture_width);
+    unsigned int* intBuf1;
+    cudaMalloc(&intBuf1, sizeof(int)*capture_height*capture_width);
+    
     
     //instantiate GPU objects
     const int blurSize = 3;
@@ -112,15 +118,14 @@ int main()
     Convolve<3, 3> gradY(sobelY);
     double gradAvg=0;
     int n=0;
+    
+    Brief brief;
     while(true)
     {
-    	//auto start=tic();
     	if (!cap.read(img)) {
 			std::cout<<"Capture read error"<<std::endl;
 			break;
 		}
-		//printf("Image size: %d,%d\n",img.cols,img.rows);
-		
 		// Begin grayscale
 		auto t=tic();
 		cv::Mat gray;
@@ -131,37 +136,38 @@ int main()
 		
 		//blur the image
 		blurX.doConvolve(floatBuf1,img.cols,img.rows,floatBuf2);
-		blurY.doConvolve(floatBuf2,img.cols,img.rows,floatBuf1);
+		blurY.doConvolve(floatBuf2,img.cols,img.rows,blurBuf);
 		// Begin convolution
 		t=tic();
-		//toc("opencv->cuda",t);
-		gradX.doConvolve(floatBuf1, img.cols, img.rows, floatBuf2);
-		gradY.doConvolve(floatBuf1, img.cols, img.rows, floatBuf3);
-		//cudaCheckError(cudaDeviceSynchronize());
-		//gradAvg+=toc("gradients",t);
+		gradX.doConvolve(blurBuf, img.cols, img.rows, floatBuf2);
+		gradY.doConvolve(blurBuf, img.cols, img.rows, floatBuf3);
 		n++;
 		
 		// Do Harris Corners
 		harris(floatBuf2, floatBuf3, img.cols, img.rows, floatBuf1, shortBuf1);
-		
 		// Do Scan. Input: activations. Output: int array with scanned count.
 		scan(shortBuf1, img.cols * img.rows);
-		// Collapse to # of corners. Input: scan results + activations, size img. Output: 1 int array for locations, 1 float array for activations, size # of corners
-		//collapse(shortBuf1, floatBuf1, img.cols * img.rows, shortBuf2, floatBuf2);
-		
-		
-		// cudaCheckError(cudaDeviceSynchronize());
+		short numCorners;
+		cudaMemcpy(&numCorners,&shortBuf1[img.cols*img.rows-1],sizeof(short),cudaMemcpyDeviceToHost);
+		// Collapse to # of corners
+		collapse(shortBuf1, floatBuf1, img.cols * img.rows, intBuf1, floatBuf2);
+		//sort corners to pick the highest N TODO
+		//find image features
+		brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,std::min((int)numCorners,NUM_CORNERS),featureBuf);
 		gradAvg+=toc("harris",t);
 		// Copy to display
-		//cv::Mat matt(img.rows,img.cols,CV_32F);
-		//cudaMemcpy(matt.ptr(), floatBuf1, sizeof(float)*gray.rows*gray.cols, cudaMemcpyDeviceToHost);
-		cv::Mat matt(img.rows,img.cols,CV_16UC1);
-		cudaMemcpy(matt.ptr(), shortBuf1, sizeof(short)*img.rows*img.cols, cudaMemcpyDeviceToHost);
-		//toc("cuda->opencv",t);
-		cv::imshow("CSI Camera", (2 << 3) * matt);
+		std::vector<unsigned int> cornerIds(numCorners);
+		cudaMemcpy(cornerIds.data(),intBuf1,sizeof(int)*numCorners,cudaMemcpyDeviceToHost);
+		for(int i=0;i<numCorners;i++){
+			unsigned int index = cornerIds[i];
+			unsigned int rId = index / img.cols;
+			unsigned int cId = index % img.cols;
+			cv::Point p(cId,rId);
+			cv::drawMarker(gray,p,255);
+		}
+		cv::imshow("CSI Camera", gray);
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
-		//toc("total",start);
     }
     printf("Average compute time: %f\n",gradAvg/n);
     cap.release();
