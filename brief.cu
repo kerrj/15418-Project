@@ -1,6 +1,6 @@
 #include "brief.h"
 
-__global__ void _brief(float* img, int img_w, int img_h, int* locations, int numCorners, int* endpoints1_x, int* endpoints1_y, int* endpoints2_x, int* endpoints2_y, char* output) {
+__global__ void _brief(float* img, int img_w, int img_h,unsigned int* locations, int numCorners, int* endpoints1_x, int* endpoints1_y, int* endpoints2_x, int* endpoints2_y, char* output) {
 	// Get pixel location
 	const int idx = blockDim.x * blockIdx.x + threadIdx.x;
 	const int location = locations[idx];
@@ -38,5 +38,5 @@ __global__ void _brief(float* img, int img_w, int img_h, int* locations, int num
 void Brief::computeBrief(float* img, int img_w, int img_h, unsigned int* locations, int numCorners, char* output){
 		const int threadsPerBlock = 128;
 		const int blocks = (numCorners + threadsPerBlock - 1) / threadsPerBlock;
-		//_brief<<<blocks, threadsPerBlock>>>(img, locations, numCorners, endpoints1, endpoints2, output);
+		_brief<<<blocks, threadsPerBlock>>>(img, img_w, img_h, locations, numCorners, endpoints1_x, endpoints1_y, endpoints2_x,endpoints2_y, output);
 }

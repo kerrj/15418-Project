@@ -40,10 +40,10 @@ public:
 	
 	void computeBrief(float* img, int img_w, int img_h, unsigned int* locations, int numCorners, char* output);
 private:
-	unsigned int* endpoints1_x;
-	unsigned int* endpoints1_y;
-	unsigned int* endpoints2_x;
-	unsigned int* endpoints2_y;
+	int* endpoints1_x;
+	int* endpoints1_y;
+	int* endpoints2_x;
+	int* endpoints2_y;
 };
 
 

@@ -17,6 +17,7 @@
 #include <vector>
 #include <chrono>
 #include <stdio.h>
+#include "matching.h"
 
 // Timing 
 std::chrono::time_point<std::chrono::system_clock> tic(){
@@ -95,8 +96,11 @@ int main()
     float* floatBuf3;
     cudaMalloc(&floatBuf3, sizeof(float)*capture_height*capture_width);
     
-    char* featureBuf;
-    cudaMalloc(&featureBuf, sizeof(char)*NUM_CORNERS*(CHARS_PER_BRIEF));
+    char* featureBuf1;
+    cudaMalloc(&featureBuf1, sizeof(char)*NUM_CORNERS*(CHARS_PER_BRIEF));
+    
+    char* featureBuf2;
+    cudaMalloc(&featureBuf2, sizeof(char)*NUM_CORNERS*(CHARS_PER_BRIEF));
     
     unsigned short* shortBuf1;
     cudaMalloc(&shortBuf1, sizeof(short)*nextPow2(capture_height*capture_width));
@@ -104,6 +108,8 @@ int main()
     unsigned int* intBuf1;
     cudaMalloc(&intBuf1, sizeof(int)*capture_height*capture_width);
     
+    FeatureDist *distMatrixBuf;
+    cudaMalloc(&distMatrixBuf,sizeof(FeatureDist)*NUM_CORNERS*NUM_CORNERS);
     
     //instantiate GPU objects
     const int blurSize = 3;
@@ -120,6 +126,9 @@ int main()
     int n=0;
     
     Brief brief;
+  	int frameNum = 0;
+  	
+  	int prevFeatureSize;
     while(true)
     {
     	if (!cap.read(img)) {
@@ -149,12 +158,51 @@ int main()
 		scan(shortBuf1, img.cols * img.rows);
 		short numCorners;
 		cudaMemcpy(&numCorners,&shortBuf1[img.cols*img.rows-1],sizeof(short),cudaMemcpyDeviceToHost);
+		if(numCorners == 0){
+			frameNum=0;
+			printf("No corners found\n");
+			continue;
+		}
 		// Collapse to # of corners
 		collapse(shortBuf1, floatBuf1, img.cols * img.rows, intBuf1, floatBuf2);
 		//sort corners to pick the highest N TODO
 		//find image features
-		brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,std::min((int)numCorners,NUM_CORNERS),featureBuf);
-		gradAvg+=toc("harris",t);
+		char* prevFeatures, *curFeatures;
+		if(frameNum & 1) {
+			brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,std::min((int)numCorners,NUM_CORNERS),featureBuf1);
+			prevFeatures=featureBuf2;
+			curFeatures=featureBuf1;
+		} else {
+			brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,std::min((int)numCorners,NUM_CORNERS),featureBuf2);
+			prevFeatures=featureBuf1;
+			curFeatures=featureBuf2;
+		}
+		
+		
+		if(frameNum++ == 0){
+			prevFeatureSize=numCorners;
+			continue;
+		}
+		// Create distance matrix (GPU)
+		makeDistMatrix(prevFeatures,curFeatures,prevFeatureSize,numCorners,distMatrixBuf);
+		
+		gradAvg+=toc("compute",t);
+		/*
+		Plan
+		1. Store featureBuf in alternative buffers
+		2. Create distance matrix between features using hamming distance
+		3. Find top ten on CPU using openMP/partial sort
+		4. Marriage-sort like algorithm for bipartite matching
+		*/
+		cv::Mat diffMat(prevFeatureSize, numCorners, CV_16U);
+		std::vector<FeatureDist> distHost(prevFeatureSize * numCorners);
+		cudaMemcpy(distHost.data(), distMatrixBuf, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
+		for(int i = 0; i < prevFeatureSize*numCorners; i++) {
+			diffMat.at<short>(i) = distHost[i].distance * 1 << 9;
+		}
+		
+		
+		prevFeatureSize=numCorners;
 		// Copy to display
 		std::vector<unsigned int> cornerIds(numCorners);
 		cudaMemcpy(cornerIds.data(),intBuf1,sizeof(int)*numCorners,cudaMemcpyDeviceToHost);
@@ -165,7 +213,8 @@ int main()
 			cv::Point p(cId,rId);
 			cv::drawMarker(gray,p,255);
 		}
-		cv::imshow("CSI Camera", gray);
+		toc("draw",t);
+		cv::imshow("CSI Camera", diffMat);
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
     }
