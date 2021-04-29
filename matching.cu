@@ -10,10 +10,11 @@ __device__ int numberOfSetBits(char c)
      
      return numBits;
 }
-__device__ int numberOfSetBitsLong(long v)
+__device__ int numberOfSetBitsInt(int i)
 {
-	//TODO make this
-	return 42;
+	i = i - ((i >> 1) & 0x55555555);
+	i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
+	return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
 }
 __global__ void _makeDistMatrix(const char* featureBuf1, const char* featureBuf2, int size1, int size2, FeatureDist* output, FeatureDist* outputTranspose){
 	// Matrix is size2 rows by size1 columns. 
@@ -22,10 +23,15 @@ __global__ void _makeDistMatrix(const char* featureBuf1, const char* featureBuf2
 	if(x>=size1 || y>=size2)return;
 	// Get the feature from location x and y
 	int diff = 0;
-	for(int i = 0; i < CHARS_PER_BRIEF; i++) {
+	/*for(int i = 0; i < CHARS_PER_BRIEF; i++) {
 		const char f1 = featureBuf1[CHARS_PER_BRIEF * x + i];
 		const char f2 = featureBuf2[CHARS_PER_BRIEF * y + i];
-		diff += 8 - numberOfSetBits(f1 ^ f2);//TODO make this use 64 bit ints
+		diff += 8 - numberOfSetBits(f1 ^ f2);
+	}*/
+	for(int i=0;i < INTS_PER_BRIEF; i++){
+		const int f1 = ((int*)featureBuf1)[INTS_PER_BRIEF * x + i];
+		const int f2 = ((int*)featureBuf2)[INTS_PER_BRIEF * y + i];
+		diff += numberOfSetBitsInt(f1 ^ f2);
 	}
 	output[x + size1 * y].distance = diff;
 	output[x + size1 * y].f2Index = y;
@@ -34,6 +40,81 @@ __global__ void _makeDistMatrix(const char* featureBuf1, const char* featureBuf2
 	outputTranspose[y + size2 * x].distance = diff;
 	outputTranspose[y + size2 * x].f2Index = y;
 	outputTranspose[y + size2 * x].f1Index = x;
+}
+
+__global__ void _propose(FeatureDist* oneRanks2, FeatureDist* twoRanks1, int size1, int size2, int roundNum) {
+	// Each feature writes its preference to the first distance field
+	// Check confirmation flag to second distance field 
+	const int x = blockDim.x * blockIdx.x + threadIdx.x;
+	
+	if(x >= size1) return;
+	
+	if(roundNum == 0) {
+		// Set 'match' flag to false. Sets 1 if currently matched
+		oneRanks2[NUM_PREFS*x + 1].distance = 0;
+		//  Rank of the next pref2 to propose to
+		oneRanks2[NUM_PREFS*x + 2].distance = 0; 
+	} 
+	// Return if matched
+	if(oneRanks2[NUM_PREFS*x + 1].distance == 1) return;
+	
+	// Get rank of next pref2 to propose to
+	int propRank = oneRanks2[NUM_PREFS*x + 2].distance++;
+	// Set propose to pref2 idx
+	oneRanks2[NUM_PREFS*x].distance = oneRanks2[NUM_PREFS*x + propRank].f2Index;
+}
+
+__global__ void _check(FeatureDist* oneRanks2, FeatureDist* twoRanks1, int size1, int size2, int roundNum) {
+	// Each feature writes its preference to the first distance field
+	// Check confirmation flag to second distance field 
+	const int x = blockDim.x * blockIdx.x + threadIdx.x;
+	
+	if(x >= size2) return;
+	
+	if(roundNum == 0) {
+		// Set rank of best match so far (default to NUM_PREFS)
+		twoRanks1[NUM_PREFS*x + 1].distance = NUM_PREFS; 
+	} 
+	FeatureDist* pref2CurRank = &twoRanks1[NUM_PREFS*x +1]; 
+	for(int i = 0; i < NUM_PREFS; i++) {
+		int pref1Idx = twoRanks1[NUM_PREFS*x + i].f1Index;
+		// If proposer's match is this pref2, and it is ranked higher in this preference list
+		if(oneRanks2[NUM_PREFS*pref1Idx].distance == x && i < pref2CurRank->distance) {
+			// Get Previous proposer's idx
+			if(pref2CurRank->distance < NUM_PREFS) {
+				int prevPref1Idx = twoRanks1[NUM_PREFS*x + pref2CurRank->distance].f1Index;
+				// Invalidate previous pref1's match flag
+				twoRanks1[NUM_PREFS*prevPref1Idx + 1].distance = 0;
+			}
+			
+			// Set proposer 
+			twoRanks1[NUM_PREFS*x].distance = pref1Idx;
+			// Set match flag to index in pref-list of proposer
+			pref2CurRank->distance = i;
+			
+			// Set pref1's match flag
+			oneRanks2[NUM_PREFS*pref1Idx + 1].distance = 1;		
+			return;
+		}
+	}
+}
+
+void galeShapleyRound(FeatureDist *pref1, FeatureDist *pref2, int size1, int size2, int roundNum) {
+	// Propose kernel
+	const int threadsPerBlock = 64;
+	const int blocks1 = (size1 + threadsPerBlock - 1) / threadsPerBlock;
+	_propose<<<blocks1, threadsPerBlock>>>(pref1, pref2, size1, size2, roundNum);
+
+	// Check kernel
+	const int blocks2 = (size2 + threadsPerBlock - 1) / threadsPerBlock;
+	_check<<<blocks2, threadsPerBlock>>>(pref1, pref2, size1, size2, roundNum);
+}
+
+void galeShapley(FeatureDist *pref1, FeatureDist *pref2, int size1, int size2) {
+	// TODO Might not finish everyone's list
+	for(int i = 0; i < NUM_PREFS; i++) {
+		galeShapleyRound(pref1, pref2, size1, size2, i);
+	}
 }
 
 void makeDistMatrix(char* featureBuf1, char* featureBuf2, int size1, int size2, FeatureDist *output, FeatureDist* outputTranspose){

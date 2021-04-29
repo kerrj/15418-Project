@@ -4,8 +4,8 @@
 #include <cuda.h>
 #include <random>
 #include <vector>
-const int INTS_PER_BRIEF = 8;
-const int CHARS_PER_BRIEF = INTS_PER_BRIEF*8;
+const int INTS_PER_BRIEF = 16;
+const int CHARS_PER_BRIEF = INTS_PER_BRIEF*4;
 const int BRIEF_SIZE = CHARS_PER_BRIEF * 8;
 const int WINDOW = 9;
 

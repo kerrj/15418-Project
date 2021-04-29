@@ -132,8 +132,6 @@ int main()
     
     float sobelY[9] = {1.0, 2.0, 1.0, 0.0, 0.0, 0.0, -1.0, -2.0, -1.0};
     Convolve<3, 3> gradY(sobelY);
-    double gradAvg=0;
-    int n=0;
     
     Brief brief;
   	int frameNum = 0;
@@ -157,11 +155,10 @@ int main()
 		//blur the image
 		blurX.doConvolve(floatBuf1,img.cols,img.rows,floatBuf2);
 		blurY.doConvolve(floatBuf2,img.cols,img.rows,blurBuf);
-		// Begin convolution
+		// sobel convolution
 		t=tic();
 		gradX.doConvolve(blurBuf, img.cols, img.rows, floatBuf2);
 		gradY.doConvolve(blurBuf, img.cols, img.rows, floatBuf3);
-		n++;
 		cudaDeviceSynchronize();
 		toc("convolve",t);
 		// Do Harris Corners
@@ -209,41 +206,85 @@ int main()
 		1. Store featureBuf in alternating buffers
 		2. Create distance matrix between features using hamming distance
 		3. Find top ten on CPU using openMP/partial sort
-		4. Marriage-sort like algorithm for bipartite matching TODO
+		4. Marriage-sort like algorithm for bipartite matching
 		*/
 		cudaDeviceSynchronize();
 		std::vector<FeatureDist> distHost(prevFeatureSize * numCorners);
 		cudaMemcpy(distHost.data(), distMatrixBuf, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
 		//sort each row and store result in prefs1
 		toc("before rows",t);
-		std::vector<FeatureDist> pref1Vec(NUM_PREFS*numCorners);
+		std::vector<FeatureDist> prefVec(NUM_PREFS*std::max((int)numCorners,prevFeatureSize));
 		#pragma omp parallel for
 		for(int r=0;r<numCorners;r++){
 			auto start = distHost.begin() + r*prevFeatureSize;
 			auto end = start + prevFeatureSize;
 			std::partial_sort(start,start+NUM_PREFS,end);
-			std::copy(start,start+NUM_PREFS,&pref1Vec[r*NUM_PREFS]);
+			std::copy(start,start+NUM_PREFS,&prefVec[r*NUM_PREFS]);
 		}
+		const int size1 = numCorners;
 		toc("after rows",t);
 		//copy the result into the prefBuf1
-		cudaMemcpy(prefBuf1,pref1Vec.data(),pref1Vec.size()*sizeof(FeatureDist),
+		cudaMemcpy(prefBuf1,prefVec.data(),size1*NUM_PREFS*sizeof(FeatureDist),
 						cudaMemcpyHostToDevice);
 		toc("after copy",t);
 		//sort each col and store result in presf2
 		cudaMemcpy(distHost.data(), distMatrixBufTranspose, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
-		//WARNING this overwrites distHost
-		std::vector<FeatureDist> pref2Vec(NUM_PREFS*prevFeatureSize);
 		#pragma omp parallel for
 		for(int c=0;c<prevFeatureSize;c++){
 			auto start = distHost.begin() + c*numCorners;
 			auto end = start + numCorners;
 			std::partial_sort(start,start+NUM_PREFS,end);
-			std::copy(start,start+NUM_PREFS,&pref2Vec[c*NUM_PREFS]);
+			std::copy(start,start+NUM_PREFS,&prefVec[c*NUM_PREFS]);
 		}
-		cudaMemcpy(prefBuf2,pref2Vec.data(),pref2Vec.size()*sizeof(FeatureDist),
+		const int size2 = prevFeatureSize;
+		cudaMemcpy(prefBuf2,prefVec.data(),size2*NUM_PREFS*sizeof(FeatureDist),
 						cudaMemcpyHostToDevice);
 		toc("partial sort preferences",t);
+		//prefBuf2 saves feature1's ranking of feature2's
+		//prefBuf1 saves feature2's ranking of feature1's
+		galeShapley(prefBuf2, prefBuf1, size2, size1);
+		//BEGIN PRINT CODE
+		std::vector<FeatureDist> xdvec(NUM_PREFS*size1);
+		std::vector<FeatureDist> xdvec2(NUM_PREFS*size2);
+		cudaMemcpy(xdvec.data(),prefBuf2,sizeof(FeatureDist)*xdvec.size(),cudaMemcpyDeviceToHost);
+		cudaMemcpy(xdvec2.data(),prefBuf1,sizeof(FeatureDist)*xdvec2.size(),cudaMemcpyDeviceToHost);
+		for(int i=0;i<size2;i++){
+			if(xdvec[i*NUM_PREFS+1].distance==1){//matched
+				printf("%d-->%d\n",i,xdvec[i*NUM_PREFS].distance);
+			}
+			//printf("Feature %d\n",i);
+			/*printf("pref1: ");
+			for(int j=0;j<NUM_PREFS;j++){
+				printf("((%d,%d), %d) ",xdvec[i*NUM_PREFS+j].f1Index,xdvec[i*NUM_PREFS+j].f2Index,xdvec[i*NUM_PREFS+j].distance);
+			}
+			printf("\npref2: ");
+			for(int j=0;j<NUM_PREFS;j++){
+				printf("((%d,%d), %d) ",xdvec2[i*NUM_PREFS+j].f1Index,xdvec2[i*NUM_PREFS+j].f2Index,xdvec2[i*NUM_PREFS+j].distance);
+			}printf("\n");*/
+			//printf("matched: %d, id: %d, nextRank: %d\n",xdvec[i*NUM_PREFS+1].distance,
+							//xdvec[i*NUM_PREFS].distance,xdvec[i*NUM_PREFS+2].distance);
+			//printf("pref2 rank: %d\n",xdvec2[i*NUM_PREFS+1].distance);
+		}
+		//END PRINT CODE
 		
+		/*//BEGIN TEST CODE
+		FeatureDist *tmpPrefBuf;
+		cudaMalloc(&tmpPrefBuf,size1*sizeof(FeatureDist)*NUM_PREFS);
+		cudaMemcpy(tmpPrefBuf,prefBuf1,size1*sizeof(FeatureDist)*NUM_PREFS,cudaMemcpyDeviceToDevice);
+		std::vector<FeatureDist> xdvec(NUM_PREFS*size1);
+		std::vector<FeatureDist> xdvec2(NUM_PREFS*size1);
+		galeShapley(prefBuf1, tmpPrefBuf, size1, size1);
+		cudaMemcpy(xdvec.data(),prefBuf1,sizeof(FeatureDist)*xdvec.size(),cudaMemcpyDeviceToHost);
+		cudaMemcpy(xdvec2.data(),tmpPrefBuf,sizeof(FeatureDist)*xdvec2.size(),cudaMemcpyDeviceToHost);
+		for(int i=0;i<std::min(50,size1);i++){
+			printf("Feature1 %d: matched: %d, id: %d, nextRank: %d\n",i,xdvec[i*NUM_PREFS+1].distance,
+							xdvec[i*NUM_PREFS].distance,xdvec[i*NUM_PREFS+2].distance);
+			printf("Feature2 %d: rank: %d\n",i,xdvec2[i*NUM_PREFS+1].distance);
+		}
+		cudaFree(tmpPrefBuf);
+		//END TEST CODE*/
+		cudaDeviceSynchronize();
+		toc("mawwiage",t);
 		//visualize the dists in an image
 		cv::Mat diffMat(prevFeatureSize, numCorners, CV_16U);
 		for(int i = 0; i < prevFeatureSize*numCorners; i++) {
@@ -266,7 +307,6 @@ int main()
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
     }
-    printf("Average compute time: %f\n",gradAvg/n);
     cap.release();
     cv::destroyAllWindows() ;
     return 0;
