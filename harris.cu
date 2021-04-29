@@ -78,8 +78,6 @@ void scan_down_kernel(unsigned short* device_data, int size, int device_data_siz
     const int index = (blockIdx.x * blockDim.x + threadIdx.x+1) * size - 1;
     // Check if index is going to be written to at this level
     if(index < device_data_size_of_array_yes_sir_not_the_previous_size) {
-    //int index = blockIdx.x * blockDim.x + threadIdx.x;
-    //if(index%size == size-1){
         // Get the index it will be combined with (halfway) 
         const int j = index - (size >> 1);
         device_data[index] = device_data[index] + device_data[j];

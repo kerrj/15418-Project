@@ -18,6 +18,7 @@
 #include <chrono>
 #include <stdio.h>
 #include "matching.h"
+#include <algorithm>
 
 // Timing 
 std::chrono::time_point<std::chrono::system_clock> tic(){
@@ -46,7 +47,7 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int frame
 const int capture_width = 1280;
 const int capture_height = 720 ;
 const int framerate = 20 ;
-const int NUM_CORNERS = 1000;//TODO make this fill the GPU
+const short NUM_CORNERS = 300;//TODO play with this 
 
 
 // Kernel for grayscale
@@ -108,8 +109,17 @@ int main()
     unsigned int* intBuf1;
     cudaMalloc(&intBuf1, sizeof(int)*capture_height*capture_width);
     
+    FeatureDist* prefBuf1;
+    cudaMalloc(&prefBuf1, sizeof(FeatureDist)*NUM_CORNERS*NUM_PREFS);
+    
+    FeatureDist* prefBuf2;
+    cudaMalloc(&prefBuf2, sizeof(FeatureDist)*NUM_CORNERS*NUM_PREFS);
+    
     FeatureDist *distMatrixBuf;
     cudaMalloc(&distMatrixBuf,sizeof(FeatureDist)*NUM_CORNERS*NUM_CORNERS);
+    
+    FeatureDist *distMatrixBufTranspose;
+    cudaMalloc(&distMatrixBufTranspose,sizeof(FeatureDist)*NUM_CORNERS*NUM_CORNERS);
     
     //instantiate GPU objects
     const int blurSize = 3;
@@ -129,6 +139,7 @@ int main()
   	int frameNum = 0;
   	
   	int prevFeatureSize;
+  	
     while(true)
     {
     	if (!cap.read(img)) {
@@ -151,56 +162,93 @@ int main()
 		gradX.doConvolve(blurBuf, img.cols, img.rows, floatBuf2);
 		gradY.doConvolve(blurBuf, img.cols, img.rows, floatBuf3);
 		n++;
-		
+		cudaDeviceSynchronize();
+		toc("convolve",t);
 		// Do Harris Corners
 		harris(floatBuf2, floatBuf3, img.cols, img.rows, floatBuf1, shortBuf1);
 		// Do Scan. Input: activations. Output: int array with scanned count.
 		scan(shortBuf1, img.cols * img.rows);
 		short numCorners;
 		cudaMemcpy(&numCorners,&shortBuf1[img.cols*img.rows-1],sizeof(short),cudaMemcpyDeviceToHost);
-		if(numCorners == 0){
+		numCorners = std::min(NUM_CORNERS,numCorners);
+		if(numCorners < NUM_PREFS){
 			frameNum=0;
 			printf("No corners found\n");
 			continue;
 		}
 		// Collapse to # of corners
 		collapse(shortBuf1, floatBuf1, img.cols * img.rows, intBuf1, floatBuf2);
-		//sort corners to pick the highest N TODO
+		//TODO sort corners to pick the highest N
 		//find image features
 		char* prevFeatures, *curFeatures;
+		cudaDeviceSynchronize();
+		toc("corners",t);
 		if(frameNum & 1) {
-			brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,std::min((int)numCorners,NUM_CORNERS),featureBuf1);
+			brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,numCorners,featureBuf1);
 			prevFeatures=featureBuf2;
 			curFeatures=featureBuf1;
 		} else {
-			brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,std::min((int)numCorners,NUM_CORNERS),featureBuf2);
+			brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,numCorners,featureBuf2);
 			prevFeatures=featureBuf1;
 			curFeatures=featureBuf2;
 		}
-		
+		cudaDeviceSynchronize();
+		toc("brief",t);
 		
 		if(frameNum++ == 0){
 			prevFeatureSize=numCorners;
 			continue;
 		}
 		// Create distance matrix (GPU)
-		makeDistMatrix(prevFeatures,curFeatures,prevFeatureSize,numCorners,distMatrixBuf);
-		
-		gradAvg+=toc("compute",t);
+		makeDistMatrix(prevFeatures,curFeatures,prevFeatureSize,numCorners,
+						distMatrixBuf,distMatrixBufTranspose);
+		cudaDeviceSynchronize();
+		toc("dist matrix",t);
 		/*
 		Plan
-		1. Store featureBuf in alternative buffers
+		1. Store featureBuf in alternating buffers
 		2. Create distance matrix between features using hamming distance
 		3. Find top ten on CPU using openMP/partial sort
-		4. Marriage-sort like algorithm for bipartite matching
+		4. Marriage-sort like algorithm for bipartite matching TODO
 		*/
-		cv::Mat diffMat(prevFeatureSize, numCorners, CV_16U);
+		cudaDeviceSynchronize();
 		std::vector<FeatureDist> distHost(prevFeatureSize * numCorners);
 		cudaMemcpy(distHost.data(), distMatrixBuf, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
-		for(int i = 0; i < prevFeatureSize*numCorners; i++) {
-			diffMat.at<short>(i) = distHost[i].distance * 1 << 9;
+		//sort each row and store result in prefs1
+		toc("before rows",t);
+		std::vector<FeatureDist> pref1Vec(NUM_PREFS*numCorners);
+		#pragma omp parallel for
+		for(int r=0;r<numCorners;r++){
+			auto start = distHost.begin() + r*prevFeatureSize;
+			auto end = start + prevFeatureSize;
+			std::partial_sort(start,start+NUM_PREFS,end);
+			std::copy(start,start+NUM_PREFS,&pref1Vec[r*NUM_PREFS]);
 		}
+		toc("after rows",t);
+		//copy the result into the prefBuf1
+		cudaMemcpy(prefBuf1,pref1Vec.data(),pref1Vec.size()*sizeof(FeatureDist),
+						cudaMemcpyHostToDevice);
+		toc("after copy",t);
+		//sort each col and store result in presf2
+		cudaMemcpy(distHost.data(), distMatrixBufTranspose, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
+		//WARNING this overwrites distHost
+		std::vector<FeatureDist> pref2Vec(NUM_PREFS*prevFeatureSize);
+		#pragma omp parallel for
+		for(int c=0;c<prevFeatureSize;c++){
+			auto start = distHost.begin() + c*numCorners;
+			auto end = start + numCorners;
+			std::partial_sort(start,start+NUM_PREFS,end);
+			std::copy(start,start+NUM_PREFS,&pref2Vec[c*NUM_PREFS]);
+		}
+		cudaMemcpy(prefBuf2,pref2Vec.data(),pref2Vec.size()*sizeof(FeatureDist),
+						cudaMemcpyHostToDevice);
+		toc("partial sort preferences",t);
 		
+		//visualize the dists in an image
+		cv::Mat diffMat(prevFeatureSize, numCorners, CV_16U);
+		for(int i = 0; i < prevFeatureSize*numCorners; i++) {
+			diffMat.at<short>(i) = distHost[i].distance * 100;
+		}
 		
 		prevFeatureSize=numCorners;
 		// Copy to display

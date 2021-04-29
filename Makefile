@@ -10,7 +10,7 @@ CC_FILES   := main.cpp
 
 OBJDIR=objs
 CXX=g++
-CXXFLAGS=-O3 -Wall -I/usr/include/opencv4 -I/usr/local/cuda-10.2/include
+CXXFLAGS=-O3 -Wall -I/usr/include/opencv4 -I/usr/local/cuda-10.2/include -fopenmp
 LDFLAGS= -L/usr/lib -lopencv_core -lopencv_highgui -lopencv_videoio -L/usr/local/cuda-10.2/lib64 -lcudart -lopencv_imgproc
 NVCC=nvcc
 NVCCFLAGS=-O3 -ccbin /usr/bin/g++
