@@ -47,7 +47,7 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int frame
 const int capture_width = 1280;
 const int capture_height = 720 ;
 const int framerate = 20 ;
-const short NUM_CORNERS = 300;//TODO play with this 
+const short NUM_CORNERS = 400;//TODO play with this 
 
 
 // Kernel for grayscale
@@ -123,7 +123,7 @@ int main()
     
     //instantiate GPU objects
     const int blurSize = 3;
-    cv::Mat blurKern = cv::getGaussianKernel(blurSize,2,CV_32F);
+    cv::Mat blurKern = cv::getGaussianKernel(blurSize,.5,CV_32F);
     Convolve<1, blurSize> blurX((float*)blurKern.ptr());
     Convolve<blurSize, 1> blurY((float*)blurKern.ptr());
     
@@ -137,6 +137,7 @@ int main()
   	int frameNum = 0;
   	
   	int prevFeatureSize;
+  	std::vector<unsigned int> cornerLocations;
   	
     while(true)
     {
@@ -167,7 +168,6 @@ int main()
 		scan(shortBuf1, img.cols * img.rows);
 		short numCorners;
 		cudaMemcpy(&numCorners,&shortBuf1[img.cols*img.rows-1],sizeof(short),cudaMemcpyDeviceToHost);
-		numCorners = std::min(NUM_CORNERS,numCorners);
 		if(numCorners < NUM_PREFS){
 			frameNum=0;
 			printf("No corners found\n");
@@ -175,7 +175,13 @@ int main()
 		}
 		// Collapse to # of corners
 		collapse(shortBuf1, floatBuf1, img.cols * img.rows, intBuf1, floatBuf2);
-		//TODO sort corners to pick the highest N
+		toc("after collapse",t);
+		
+		std::vector<unsigned int> prevCornerLocations = cornerLocations;
+		cornerLocations = selectCorners(intBuf1, floatBuf1, numCorners, 
+				std::min(NUM_CORNERS,numCorners));
+		toc("after select corners",t);
+		numCorners = std::min(NUM_CORNERS,numCorners);
 		//find image features
 		char* prevFeatures, *curFeatures;
 		cudaDeviceSynchronize();
@@ -201,13 +207,7 @@ int main()
 						distMatrixBuf,distMatrixBufTranspose);
 		cudaDeviceSynchronize();
 		toc("dist matrix",t);
-		/*
-		Plan
-		1. Store featureBuf in alternating buffers
-		2. Create distance matrix between features using hamming distance
-		3. Find top ten on CPU using openMP/partial sort
-		4. Marriage-sort like algorithm for bipartite matching
-		*/
+		
 		cudaDeviceSynchronize();
 		std::vector<FeatureDist> distHost(prevFeatureSize * numCorners);
 		cudaMemcpy(distHost.data(), distMatrixBuf, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
@@ -243,69 +243,43 @@ int main()
 		//prefBuf2 saves feature1's ranking of feature2's
 		//prefBuf1 saves feature2's ranking of feature1's
 		galeShapley(prefBuf2, prefBuf1, size2, size1);
-		//BEGIN PRINT CODE
-		std::vector<FeatureDist> xdvec(NUM_PREFS*size1);
-		std::vector<FeatureDist> xdvec2(NUM_PREFS*size2);
-		cudaMemcpy(xdvec.data(),prefBuf2,sizeof(FeatureDist)*xdvec.size(),cudaMemcpyDeviceToHost);
-		cudaMemcpy(xdvec2.data(),prefBuf1,sizeof(FeatureDist)*xdvec2.size(),cudaMemcpyDeviceToHost);
-		for(int i=0;i<size2;i++){
-			if(xdvec[i*NUM_PREFS+1].distance==1){//matched
-				printf("%d-->%d\n",i,xdvec[i*NUM_PREFS].distance);
-			}
-			//printf("Feature %d\n",i);
-			/*printf("pref1: ");
-			for(int j=0;j<NUM_PREFS;j++){
-				printf("((%d,%d), %d) ",xdvec[i*NUM_PREFS+j].f1Index,xdvec[i*NUM_PREFS+j].f2Index,xdvec[i*NUM_PREFS+j].distance);
-			}
-			printf("\npref2: ");
-			for(int j=0;j<NUM_PREFS;j++){
-				printf("((%d,%d), %d) ",xdvec2[i*NUM_PREFS+j].f1Index,xdvec2[i*NUM_PREFS+j].f2Index,xdvec2[i*NUM_PREFS+j].distance);
-			}printf("\n");*/
-			//printf("matched: %d, id: %d, nextRank: %d\n",xdvec[i*NUM_PREFS+1].distance,
-							//xdvec[i*NUM_PREFS].distance,xdvec[i*NUM_PREFS+2].distance);
-			//printf("pref2 rank: %d\n",xdvec2[i*NUM_PREFS+1].distance);
-		}
-		//END PRINT CODE
 		
-		/*//BEGIN TEST CODE
-		FeatureDist *tmpPrefBuf;
-		cudaMalloc(&tmpPrefBuf,size1*sizeof(FeatureDist)*NUM_PREFS);
-		cudaMemcpy(tmpPrefBuf,prefBuf1,size1*sizeof(FeatureDist)*NUM_PREFS,cudaMemcpyDeviceToDevice);
-		std::vector<FeatureDist> xdvec(NUM_PREFS*size1);
-		std::vector<FeatureDist> xdvec2(NUM_PREFS*size1);
-		galeShapley(prefBuf1, tmpPrefBuf, size1, size1);
-		cudaMemcpy(xdvec.data(),prefBuf1,sizeof(FeatureDist)*xdvec.size(),cudaMemcpyDeviceToHost);
-		cudaMemcpy(xdvec2.data(),tmpPrefBuf,sizeof(FeatureDist)*xdvec2.size(),cudaMemcpyDeviceToHost);
-		for(int i=0;i<std::min(50,size1);i++){
-			printf("Feature1 %d: matched: %d, id: %d, nextRank: %d\n",i,xdvec[i*NUM_PREFS+1].distance,
-							xdvec[i*NUM_PREFS].distance,xdvec[i*NUM_PREFS+2].distance);
-			printf("Feature2 %d: rank: %d\n",i,xdvec2[i*NUM_PREFS+1].distance);
-		}
-		cudaFree(tmpPrefBuf);
-		//END TEST CODE*/
 		cudaDeviceSynchronize();
 		toc("mawwiage",t);
 		//visualize the dists in an image
-		cv::Mat diffMat(prevFeatureSize, numCorners, CV_16U);
+		/*cv::Mat diffMat(prevFeatureSize, numCorners, CV_16U);
 		for(int i = 0; i < prevFeatureSize*numCorners; i++) {
 			diffMat.at<short>(i) = distHost[i].distance * 100;
-		}
+		}*/
 		
-		prevFeatureSize=numCorners;
 		// Copy to display
-		std::vector<unsigned int> cornerIds(numCorners);
-		cudaMemcpy(cornerIds.data(),intBuf1,sizeof(int)*numCorners,cudaMemcpyDeviceToHost);
-		for(int i=0;i<numCorners;i++){
-			unsigned int index = cornerIds[i];
-			unsigned int rId = index / img.cols;
-			unsigned int cId = index % img.cols;
-			cv::Point p(cId,rId);
-			cv::drawMarker(gray,p,255);
+		std::vector<FeatureDist> feature1Ranks2(NUM_PREFS*size2);
+		std::vector<FeatureDist> feature2Ranks1(NUM_PREFS*size1);
+		cudaMemcpy(feature1Ranks2.data(),prefBuf2,sizeof(FeatureDist)*feature1Ranks2.size(),cudaMemcpyDeviceToHost);
+		cudaMemcpy(feature2Ranks1.data(),prefBuf1,sizeof(FeatureDist)*feature2Ranks1.size(),cudaMemcpyDeviceToHost);
+		std::vector<unsigned int> &feature1Locations = prevCornerLocations;
+		std::vector<unsigned int> &feature2Locations = cornerLocations;
+		for(size_t i=0;i<size2;i++){
+			if(feature1Ranks2[NUM_PREFS*i+1].flag!=1)continue;
+			unsigned int imageIndex = feature1Locations.at(i);
+			unsigned int rId = imageIndex / img.cols;
+			unsigned int cId = imageIndex % img.cols;
+			unsigned int matchIn2 = feature1Ranks2[i * NUM_PREFS].flag;
+			unsigned int imageIndex2 = feature2Locations.at(matchIn2);
+			
+			unsigned int rId2 = imageIndex2 / img.cols;
+			unsigned int cId2 = imageIndex2 % img.cols;
+			if(std::abs(std::hypot(rId2-rId,cId-cId2))>50)continue;
+			cv::Point start(cId,rId);
+			cv::Point end(cId2, rId2);
+			cv::arrowedLine(gray,start,end,255);
 		}
 		toc("draw",t);
-		cv::imshow("CSI Camera", diffMat);
+		cv::imshow("CSI Camera", gray);
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
+		
+		prevFeatureSize=numCorners;
     }
     cap.release();
     cv::destroyAllWindows() ;

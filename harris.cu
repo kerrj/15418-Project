@@ -124,7 +124,7 @@ void harris(float* gradX, float* gradY, int img_w, int img_h, float* activations
 
 void scan(unsigned short* device_data, int length)
 {
-    const int threadsPerBlock = 128;
+    const int threadsPerBlock = 64;
     const int length_nextPow2 = nextPow2(length);
     int i = 2;
     for (; i < length_nextPow2; i=(i<<1)) {
@@ -144,8 +144,31 @@ void scan(unsigned short* device_data, int length)
 
 
 void collapse(const unsigned short* scanResult, const float* activations, int size, unsigned int* locations, float* outputActivations) {
-	const int threadsPerBlock = 128;
+	const int threadsPerBlock = 64;
 	const int blocks = (size + threadsPerBlock - 1) / threadsPerBlock;
-	_collapse<<<blocks, threadsPerBlock>>>(scanResult, activations, size, locations, outputActivations);
-	
+	_collapse<<<blocks, threadsPerBlock>>>(scanResult, activations, size, locations, outputActivations);	
 }
+bool compareCorners(std::pair<float, unsigned int> c1, std::pair<float, unsigned int> c2) {
+	return c1.first > c2.first;
+}
+std::vector<unsigned int> selectCorners(unsigned int* locations, float* outputActivations, int numCorners, int numSelect) {
+	// numCorners: Number of corners passed in
+	// numSelect: Number of corners to return 
+	// Sorts locations by outputActivations (outputActivations is unchanged)
+	// Copy data from cuda memory
+	std::vector<unsigned int> locations_local(numCorners);
+	std::vector<float> activations_local(numCorners);
+	cudaMemcpy(locations_local.data(), locations, sizeof(int)*numCorners, cudaMemcpyDeviceToHost);
+	cudaMemcpy(activations_local.data(), outputActivations, sizeof(float)*numCorners, cudaMemcpyDeviceToHost);
+	// Make pairs of (activation, location)
+	std::vector<std::pair<float, unsigned int> > cornerPairs(numCorners);
+	for(int i = 0; i < numCorners; i++)
+		cornerPairs[i] = std::make_pair(activations_local[i], locations_local[i]);  
+	// Do partial sort 
+	std::partial_sort(cornerPairs.begin(), cornerPairs.begin() + numSelect, cornerPairs.end(), compareCorners);
+	// Return locations only as a vector 
+	for(int i = 0; i < numSelect; i++)
+		locations_local[i] = cornerPairs[i].second;
+	cudaMemcpy(locations, locations_local.data(), sizeof(int)*numSelect, cudaMemcpyHostToDevice);
+	return locations_local;
+};
