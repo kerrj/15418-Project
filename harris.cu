@@ -148,9 +148,11 @@ void collapse(const unsigned short* scanResult, const float* activations, int si
 	const int blocks = (size + threadsPerBlock - 1) / threadsPerBlock;
 	_collapse<<<blocks, threadsPerBlock>>>(scanResult, activations, size, locations, outputActivations);	
 }
+
 bool compareCorners(std::pair<float, unsigned int> c1, std::pair<float, unsigned int> c2) {
 	return c1.first > c2.first;
 }
+
 std::vector<unsigned int> selectCorners(unsigned int* locations, float* outputActivations, int numCorners, int numSelect) {
 	// numCorners: Number of corners passed in
 	// numSelect: Number of corners to return 

@@ -46,8 +46,8 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int frame
 // Camera Params
 const int capture_width = 1280;
 const int capture_height = 720 ;
-const int framerate = 20 ;
-const short NUM_CORNERS = 400;//TODO play with this 
+const int framerate = 24 ;
+const short NUM_CORNERS = 300;//TODO play with this 
 
 
 // Kernel for grayscale
@@ -123,7 +123,7 @@ int main()
     
     //instantiate GPU objects
     const int blurSize = 3;
-    cv::Mat blurKern = cv::getGaussianKernel(blurSize,.5,CV_32F);
+    cv::Mat blurKern = cv::getGaussianKernel(blurSize,1,CV_32F);
     Convolve<1, blurSize> blurX((float*)blurKern.ptr());
     Convolve<blurSize, 1> blurY((float*)blurKern.ptr());
     
@@ -164,8 +164,10 @@ int main()
 		toc("convolve",t);
 		// Do Harris Corners
 		harris(floatBuf2, floatBuf3, img.cols, img.rows, floatBuf1, shortBuf1);
+		toc("harris",t);
 		// Do Scan. Input: activations. Output: int array with scanned count.
 		scan(shortBuf1, img.cols * img.rows);
+		toc("scan",t);
 		short numCorners;
 		cudaMemcpy(&numCorners,&shortBuf1[img.cols*img.rows-1],sizeof(short),cudaMemcpyDeviceToHost);
 		if(numCorners < NUM_PREFS){
@@ -203,17 +205,22 @@ int main()
 			continue;
 		}
 		// Create distance matrix (GPU)
+		//we use intbuf1 and shortbuf1 to hold the locations of 
+		const int size1 = numCorners;
+		const int size2 = prevFeatureSize;
+		cudaMemcpy(intBuf1,prevCornerLocations.data(),sizeof(int)*size2,cudaMemcpyHostToDevice);
+		cudaMemcpy(shortBuf1,cornerLocations.data(),sizeof(int)*size1,cudaMemcpyHostToDevice);
 		makeDistMatrix(prevFeatures,curFeatures,prevFeatureSize,numCorners,
-						distMatrixBuf,distMatrixBufTranspose);
+						(int*)intBuf1, (int*)shortBuf1,
+						distMatrixBuf,distMatrixBufTranspose,img.cols,img.rows);
 		cudaDeviceSynchronize();
 		toc("dist matrix",t);
 		
 		cudaDeviceSynchronize();
 		std::vector<FeatureDist> distHost(prevFeatureSize * numCorners);
+		std::vector<FeatureDist> prefVec(NUM_PREFS*std::max((int)numCorners,prevFeatureSize));
 		cudaMemcpy(distHost.data(), distMatrixBuf, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
 		//sort each row and store result in prefs1
-		toc("before rows",t);
-		std::vector<FeatureDist> prefVec(NUM_PREFS*std::max((int)numCorners,prevFeatureSize));
 		#pragma omp parallel for
 		for(int r=0;r<numCorners;r++){
 			auto start = distHost.begin() + r*prevFeatureSize;
@@ -221,12 +228,9 @@ int main()
 			std::partial_sort(start,start+NUM_PREFS,end);
 			std::copy(start,start+NUM_PREFS,&prefVec[r*NUM_PREFS]);
 		}
-		const int size1 = numCorners;
-		toc("after rows",t);
 		//copy the result into the prefBuf1
 		cudaMemcpy(prefBuf1,prefVec.data(),size1*NUM_PREFS*sizeof(FeatureDist),
 						cudaMemcpyHostToDevice);
-		toc("after copy",t);
 		//sort each col and store result in presf2
 		cudaMemcpy(distHost.data(), distMatrixBufTranspose, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
 		#pragma omp parallel for
@@ -236,14 +240,12 @@ int main()
 			std::partial_sort(start,start+NUM_PREFS,end);
 			std::copy(start,start+NUM_PREFS,&prefVec[c*NUM_PREFS]);
 		}
-		const int size2 = prevFeatureSize;
 		cudaMemcpy(prefBuf2,prefVec.data(),size2*NUM_PREFS*sizeof(FeatureDist),
 						cudaMemcpyHostToDevice);
 		toc("partial sort preferences",t);
 		//prefBuf2 saves feature1's ranking of feature2's
 		//prefBuf1 saves feature2's ranking of feature1's
 		galeShapley(prefBuf2, prefBuf1, size2, size1);
-		
 		cudaDeviceSynchronize();
 		toc("mawwiage",t);
 		//visualize the dists in an image
@@ -261,15 +263,13 @@ int main()
 		std::vector<unsigned int> &feature2Locations = cornerLocations;
 		for(size_t i=0;i<size2;i++){
 			if(feature1Ranks2[NUM_PREFS*i+1].flag!=1)continue;
-			unsigned int imageIndex = feature1Locations.at(i);
-			unsigned int rId = imageIndex / img.cols;
-			unsigned int cId = imageIndex % img.cols;
-			unsigned int matchIn2 = feature1Ranks2[i * NUM_PREFS].flag;
-			unsigned int imageIndex2 = feature2Locations.at(matchIn2);
-			
-			unsigned int rId2 = imageIndex2 / img.cols;
-			unsigned int cId2 = imageIndex2 % img.cols;
-			if(std::abs(std::hypot(rId2-rId,cId-cId2))>50)continue;
+			int imageIndex = feature1Locations.at(i);
+			int rId = imageIndex / img.cols;
+			int cId = imageIndex % img.cols;
+			int matchIn2 = feature1Ranks2[i * NUM_PREFS].flag;
+			int imageIndex2 = feature2Locations.at(matchIn2);
+			int rId2 = imageIndex2 / img.cols;
+			int cId2 = imageIndex2 % img.cols;
 			cv::Point start(cId,rId);
 			cv::Point end(cId2, rId2);
 			cv::arrowedLine(gray,start,end,255);
