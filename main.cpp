@@ -24,9 +24,10 @@
 std::chrono::time_point<std::chrono::system_clock> tic(){
 	return std::chrono::system_clock::now();
 }
-double toc(std::string msg,std::chrono::time_point<std::chrono::system_clock> t){
+double toc(std::string msg,std::chrono::time_point<std::chrono::system_clock> & t){
 	std::chrono::duration<double> elapsed=std::chrono::system_clock::now()-t;
 	printf("Time for %s: %f\n",msg.c_str(),elapsed.count());
+	t = tic();
 	return elapsed.count();
 }
 #define cudaCheckError(ans)  cudaAssert((ans), __FILE__, __LINE__);
@@ -46,8 +47,8 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int frame
 // Camera Params
 const int capture_width = 1280;
 const int capture_height = 720 ;
-const int framerate = 24 ;
-const short NUM_CORNERS = 300;//TODO play with this 
+const int framerate = 20 ;
+const short NUM_CORNERS = 500;//TODO play with this 
 
 
 // Kernel for grayscale
@@ -139,12 +140,18 @@ int main()
   	int prevFeatureSize;
   	std::vector<unsigned int> cornerLocations;
   	
+  	//Timing variables
+  	std::vector<double> timeTable(10);
+  	int numRounds = 0;
+  	
     while(true)
-    {
+    {	
     	if (!cap.read(img)) {
 			std::cout<<"Capture read error"<<std::endl;
 			break;
 		}
+		numRounds++;
+		printf("\n");
 		// Begin grayscale
 		auto t=tic();
 		cv::Mat gray;
@@ -161,13 +168,15 @@ int main()
 		gradX.doConvolve(blurBuf, img.cols, img.rows, floatBuf2);
 		gradY.doConvolve(blurBuf, img.cols, img.rows, floatBuf3);
 		cudaDeviceSynchronize();
-		toc("convolve",t);
+		timeTable[0] += toc("convolve",t);
 		// Do Harris Corners
 		harris(floatBuf2, floatBuf3, img.cols, img.rows, floatBuf1, shortBuf1);
-		toc("harris",t);
+		cudaDeviceSynchronize();
+		timeTable[1] += toc("harris",t);
 		// Do Scan. Input: activations. Output: int array with scanned count.
 		scan(shortBuf1, img.cols * img.rows);
-		toc("scan",t);
+		cudaDeviceSynchronize();
+		timeTable[2] += toc("scan",t);
 		short numCorners;
 		cudaMemcpy(&numCorners,&shortBuf1[img.cols*img.rows-1],sizeof(short),cudaMemcpyDeviceToHost);
 		if(numCorners < NUM_PREFS){
@@ -177,17 +186,17 @@ int main()
 		}
 		// Collapse to # of corners
 		collapse(shortBuf1, floatBuf1, img.cols * img.rows, intBuf1, floatBuf2);
-		toc("after collapse",t);
+		cudaDeviceSynchronize();
+		timeTable[3] += toc("after collapse",t);
 		
 		std::vector<unsigned int> prevCornerLocations = cornerLocations;
 		cornerLocations = selectCorners(intBuf1, floatBuf1, numCorners, 
 				std::min(NUM_CORNERS,numCorners));
-		toc("after select corners",t);
+		cudaDeviceSynchronize();
+		timeTable[4] += toc("after select corners",t);
 		numCorners = std::min(NUM_CORNERS,numCorners);
 		//find image features
 		char* prevFeatures, *curFeatures;
-		cudaDeviceSynchronize();
-		toc("corners",t);
 		if(frameNum & 1) {
 			brief.computeBrief(blurBuf,img.cols, img.rows, intBuf1,numCorners,featureBuf1);
 			prevFeatures=featureBuf2;
@@ -198,7 +207,7 @@ int main()
 			curFeatures=featureBuf2;
 		}
 		cudaDeviceSynchronize();
-		toc("brief",t);
+		timeTable[5] += toc("brief",t);
 		
 		if(frameNum++ == 0){
 			prevFeatureSize=numCorners;
@@ -214,7 +223,7 @@ int main()
 						(int*)intBuf1, (int*)shortBuf1,
 						distMatrixBuf,distMatrixBufTranspose,img.cols,img.rows);
 		cudaDeviceSynchronize();
-		toc("dist matrix",t);
+		timeTable[6] += toc("dist matrix",t);
 		
 		cudaDeviceSynchronize();
 		std::vector<FeatureDist> distHost(prevFeatureSize * numCorners);
@@ -242,12 +251,12 @@ int main()
 		}
 		cudaMemcpy(prefBuf2,prefVec.data(),size2*NUM_PREFS*sizeof(FeatureDist),
 						cudaMemcpyHostToDevice);
-		toc("partial sort preferences",t);
+		timeTable[7] += toc("partial sort preferences",t);
 		//prefBuf2 saves feature1's ranking of feature2's
 		//prefBuf1 saves feature2's ranking of feature1's
 		galeShapley(prefBuf2, prefBuf1, size2, size1);
 		cudaDeviceSynchronize();
-		toc("mawwiage",t);
+		timeTable[8] += toc("mawwiage",t);
 		//visualize the dists in an image
 		/*cv::Mat diffMat(prevFeatureSize, numCorners, CV_16U);
 		for(int i = 0; i < prevFeatureSize*numCorners; i++) {
@@ -274,13 +283,20 @@ int main()
 			cv::Point end(cId2, rId2);
 			cv::arrowedLine(gray,start,end,255);
 		}
-		toc("draw",t);
+		timeTable[9] +=toc("draw",t);
 		cv::imshow("CSI Camera", gray);
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
 		
 		prevFeatureSize=numCorners;
     }
+
+    
+    // Print timing
+    printf("Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, Draw\n");
+    for(double t : timeTable) printf("%f ", t/numRounds);
+    printf("\n");
+    
     cap.release();
     cv::destroyAllWindows() ;
     return 0;

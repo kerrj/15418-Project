@@ -13,7 +13,7 @@ CXX=g++
 CXXFLAGS=-O3 -Wall -I/usr/include/opencv4 -I/usr/local/cuda-10.2/include -fopenmp
 LDFLAGS= -L/usr/lib -lopencv_core -lopencv_highgui -lopencv_videoio -L/usr/local/cuda-10.2/lib64 -lcudart -lopencv_imgproc
 NVCC=nvcc
-NVCCFLAGS=-O3 -ccbin /usr/bin/g++
+NVCCFLAGS=-O3 -ccbin /usr/bin/g++ -arch=sm_53
 
 OBJS=$(OBJDIR)/grayscale.o $(OBJDIR)/convolve.o $(OBJDIR)/harris.o $(OBJDIR)/brief.o $(OBJDIR)/matching.o
 
