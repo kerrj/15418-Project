@@ -48,13 +48,9 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int frame
 const int capture_width = 1280;
 const int capture_height = 720 ;
 const int framerate = 20 ;
-const short NUM_CORNERS = 500;//TODO play with this 
+const short NUM_CORNERS = 400;//TODO play with this 
+const int blurSize = 3;
 
-
-// Kernel for grayscale
-const dim3 grayBlockSize(32);
-const dim3 grayGridSize((capture_height*capture_width+grayBlockSize.x - 1)/grayBlockSize.x);
- 
 static inline int nextPow2(int n)
 {
     n--;
@@ -123,17 +119,15 @@ int main()
     cudaMalloc(&distMatrixBufTranspose,sizeof(FeatureDist)*NUM_CORNERS*NUM_CORNERS);
     
     //instantiate GPU objects
-    const int blurSize = 3;
-    cv::Mat blurKern = cv::getGaussianKernel(blurSize,1,CV_32F);
-    Convolve<1, blurSize> blurX((float*)blurKern.ptr());
-    Convolve<blurSize, 1> blurY((float*)blurKern.ptr());
     
+    cv::Mat blurKern = cv::getGaussianKernel(blurSize,1,CV_32F);
+    Convolve blurX((float*)blurKern.ptr(),1,blurSize,0);
+    Convolve blurY((float*)blurKern.ptr(),blurSize,1,0);
     float sobelX[9] = {1.0, 0.0, -1.0, 2.0, 0.0, -2.0, 1.0, 0.0, -1.0};
-    Convolve<3, 3> gradX(sobelX);
+    Convolve gradX(sobelX,3,3,1);
     
     float sobelY[9] = {1.0, 2.0, 1.0, 0.0, 0.0, 0.0, -1.0, -2.0, -1.0};
-    Convolve<3, 3> gradY(sobelY);
-    
+    Convolve gradY(sobelY,3,3,2);
     Brief brief;
   	int frameNum = 0;
   	
@@ -154,6 +148,7 @@ int main()
 		printf("\n");
 		// Begin grayscale
 		auto t=tic();
+		auto start=tic();
 		cv::Mat gray;
 		img.convertTo(gray,CV_32F,1/255.0);
 		// End grayscale
@@ -257,13 +252,8 @@ int main()
 		galeShapley(prefBuf2, prefBuf1, size2, size1);
 		cudaDeviceSynchronize();
 		timeTable[8] += toc("mawwiage",t);
-		//visualize the dists in an image
-		/*cv::Mat diffMat(prevFeatureSize, numCorners, CV_16U);
-		for(int i = 0; i < prevFeatureSize*numCorners; i++) {
-			diffMat.at<short>(i) = distHost[i].distance * 100;
-		}*/
-		
 		// Copy to display
+		toc("Total compute",start);
 		std::vector<FeatureDist> feature1Ranks2(NUM_PREFS*size2);
 		std::vector<FeatureDist> feature2Ranks1(NUM_PREFS*size1);
 		cudaMemcpy(feature1Ranks2.data(),prefBuf2,sizeof(FeatureDist)*feature1Ranks2.size(),cudaMemcpyDeviceToHost);
@@ -274,11 +264,11 @@ int main()
 			if(feature1Ranks2[NUM_PREFS*i+1].flag!=1)continue;
 			int imageIndex = feature1Locations.at(i);
 			int rId = imageIndex / img.cols;
-			int cId = imageIndex % img.cols;
+			int cId = imageIndex - rId*img.cols;
 			int matchIn2 = feature1Ranks2[i * NUM_PREFS].flag;
 			int imageIndex2 = feature2Locations.at(matchIn2);
 			int rId2 = imageIndex2 / img.cols;
-			int cId2 = imageIndex2 % img.cols;
+			int cId2 = imageIndex2 - rId2*img.cols;
 			cv::Point start(cId,rId);
 			cv::Point end(cId2, rId2);
 			cv::arrowedLine(gray,start,end,255);

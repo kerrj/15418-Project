@@ -10,12 +10,14 @@ __device__ int numberOfSetBits(char c)
      
      return numBits;
 }
+
 __device__ int numberOfSetBitsInt(int i)
 {
 	i = i - ((i >> 1) & 0x55555555);
 	i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
 	return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
 }
+
 __global__ void _makeDistMatrix(const char* featureBuf1, const char* featureBuf2, int size1, int size2,int* locs1, int* locs2, FeatureDist* output, FeatureDist* outputTranspose, int img_w, int img_h){
 	// Matrix is size2 rows by size1 columns. 
 	const int x = blockDim.x * blockIdx.x + threadIdx.x;
@@ -28,10 +30,11 @@ __global__ void _makeDistMatrix(const char* featureBuf1, const char* featureBuf2
 		const int f2 = ((int*)featureBuf2)[INTS_PER_BRIEF * y + i];
 		diff += numberOfSetBitsInt(f1 ^ f2);
 	}
-	const int xloc1 = locs1[x] % img_w;
 	const int yloc1 = locs1[x] / img_w;
-	const int xloc2 = locs2[y] % img_w;
+	const int xloc1 = locs1[x] - yloc1*img_w;
 	const int yloc2 = locs2[y] / img_w;
+	const int xloc2 = locs2[y] - yloc2*img_w;
+	
 	diff += 2*(std::abs(xloc1-xloc2)+std::abs(yloc1-yloc2));
 	output[x + size1 * y].featureDistance = diff;
 	output[x + size1 * y].f2Index = y;

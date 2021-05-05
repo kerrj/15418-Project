@@ -1,11 +1,13 @@
 #include "brief.h"
 
-__global__ void _brief(float* img, int img_w, int img_h,unsigned int* locations, int numCorners, int* endpoints1_x, int* endpoints1_y, int* endpoints2_x, int* endpoints2_y, char* output) {
+__global__ void _brief(const float* img, const int img_w,const  int img_h,const unsigned int* locations,
+	 const int numCorners,const int* endpoints1_x,const int* endpoints1_y,const int* endpoints2_x,const int* endpoints2_y, char* output) {
 	// Get pixel location
 	const int idx = blockDim.x * blockIdx.x + threadIdx.x;
+	if(idx>=numCorners)return;
 	const int location = locations[idx];
-	const int x = location % img_w;
 	const int y = location / img_w;
+	const int x = location - y*img_w;
 	
 	if(x - (WINDOW/2) < 0 || x + (WINDOW/2) >= img_w) return;
 	if(y - (WINDOW/2) < 0 || y + (WINDOW/2) >= img_h) return;
