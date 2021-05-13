@@ -26,7 +26,7 @@ std::chrono::time_point<std::chrono::system_clock> tic(){
 }
 double toc(std::string msg,std::chrono::time_point<std::chrono::system_clock> & t){
 	std::chrono::duration<double> elapsed=std::chrono::system_clock::now()-t;
-	printf("Time for %s: %f\n",msg.c_str(),elapsed.count());
+	//printf("Time for %s: %f\n",msg.c_str(),elapsed.count());
 	t = tic();
 	return elapsed.count();
 }
@@ -45,9 +45,9 @@ std::string gstreamer_pipeline (int capture_width, int capture_height, int frame
 }
 
 // Camera Params
-const int capture_width = 1280;
-const int capture_height = 720 ;
-const int framerate = 20 ;
+const int capture_width = 640;
+const int capture_height = 480 ;
+const int framerate = 30 ;
 const short NUM_CORNERS = 400;//TODO play with this 
 const int blurSize = 3;
 
@@ -135,7 +135,7 @@ int main()
   	std::vector<unsigned int> cornerLocations;
   	
   	//Timing variables
-  	std::vector<double> timeTable(10);
+  	std::vector<double> timeTable(11);
   	int numRounds = 0;
   	
     while(true)
@@ -145,7 +145,7 @@ int main()
 			break;
 		}
 		numRounds++;
-		printf("\n");
+		//printf("\n");
 		// Begin grayscale
 		auto t=tic();
 		auto start=tic();
@@ -153,8 +153,9 @@ int main()
 		img.convertTo(gray,CV_32F,1/255.0);
 		// End grayscale
 		//copy memory to cuda land
+		auto tcpy=tic();
 		cudaMemcpy(floatBuf1, gray.ptr(), sizeof(float)*gray.rows*gray.cols,cudaMemcpyHostToDevice);
-		
+		timeTable[9] += toc("cpy",tcpy);
 		//blur the image
 		blurX.doConvolve(floatBuf1,img.cols,img.rows,floatBuf2);
 		blurY.doConvolve(floatBuf2,img.cols,img.rows,blurBuf);
@@ -173,7 +174,9 @@ int main()
 		cudaDeviceSynchronize();
 		timeTable[2] += toc("scan",t);
 		short numCorners;
+		tcpy=tic();
 		cudaMemcpy(&numCorners,&shortBuf1[img.cols*img.rows-1],sizeof(short),cudaMemcpyDeviceToHost);
+		timeTable[9] += toc("cpy",tcpy);
 		if(numCorners < NUM_PREFS){
 			frameNum=0;
 			printf("No corners found\n");
@@ -212,8 +215,10 @@ int main()
 		//we use intbuf1 and shortbuf1 to hold the locations of 
 		const int size1 = numCorners;
 		const int size2 = prevFeatureSize;
+		tcpy=tic();
 		cudaMemcpy(intBuf1,prevCornerLocations.data(),sizeof(int)*size2,cudaMemcpyHostToDevice);
 		cudaMemcpy(shortBuf1,cornerLocations.data(),sizeof(int)*size1,cudaMemcpyHostToDevice);
+		timeTable[9] += toc("cpy",tcpy);
 		makeDistMatrix(prevFeatures,curFeatures,prevFeatureSize,numCorners,
 						(int*)intBuf1, (int*)shortBuf1,
 						distMatrixBuf,distMatrixBufTranspose,img.cols,img.rows);
@@ -223,7 +228,9 @@ int main()
 		cudaDeviceSynchronize();
 		std::vector<FeatureDist> distHost(prevFeatureSize * numCorners);
 		std::vector<FeatureDist> prefVec(NUM_PREFS*std::max((int)numCorners,prevFeatureSize));
+		tcpy=tic();
 		cudaMemcpy(distHost.data(), distMatrixBuf, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
+		timeTable[9] += toc("cpy",tcpy);
 		//sort each row and store result in prefs1
 		#pragma omp parallel for
 		for(int r=0;r<numCorners;r++){
@@ -233,10 +240,12 @@ int main()
 			std::copy(start,start+NUM_PREFS,&prefVec[r*NUM_PREFS]);
 		}
 		//copy the result into the prefBuf1
+		tcpy=tic();
 		cudaMemcpy(prefBuf1,prefVec.data(),size1*NUM_PREFS*sizeof(FeatureDist),
 						cudaMemcpyHostToDevice);
 		//sort each col and store result in presf2
 		cudaMemcpy(distHost.data(), distMatrixBufTranspose, sizeof(FeatureDist)*prevFeatureSize*numCorners, cudaMemcpyDeviceToHost);
+		timeTable[9] += toc("cpy",tcpy);
 		#pragma omp parallel for
 		for(int c=0;c<prevFeatureSize;c++){
 			auto start = distHost.begin() + c*numCorners;
@@ -244,8 +253,10 @@ int main()
 			std::partial_sort(start,start+NUM_PREFS,end);
 			std::copy(start,start+NUM_PREFS,&prefVec[c*NUM_PREFS]);
 		}
+		tcpy=tic();
 		cudaMemcpy(prefBuf2,prefVec.data(),size2*NUM_PREFS*sizeof(FeatureDist),
 						cudaMemcpyHostToDevice);
+		timeTable[9] += toc("cpy",tcpy);
 		timeTable[7] += toc("partial sort preferences",t);
 		//prefBuf2 saves feature1's ranking of feature2's
 		//prefBuf1 saves feature2's ranking of feature1's
@@ -273,7 +284,7 @@ int main()
 			cv::Point end(cId2, rId2);
 			cv::arrowedLine(gray,start,end,255);
 		}
-		timeTable[9] +=toc("draw",t);
+		timeTable[10] +=toc("draw",t);
 		cv::imshow("CSI Camera", gray);
 		int keycode = cv::waitKey(1) & 0xff ; 
 		if (keycode == 27) break ;
@@ -283,8 +294,13 @@ int main()
 
     
     // Print timing
-    printf("Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, Draw\n");
+    printf("Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, memcpy, Draw\n");
+    double total=0;
+    for(int i=0;i<timeTable.size()-2;i++){
+    	total += timeTable[i]/numRounds;
+    }
     for(double t : timeTable) printf("%f ", t/numRounds);
+    printf("\nTotal: %f\n",total);
     printf("\n");
     
     cap.release();

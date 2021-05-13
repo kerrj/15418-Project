@@ -1,0 +1,41 @@
+unoptimized 1920x1080
+Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, Draw
+0.019368 0.051951 0.008298 0.001204 0.000641 0.001446 0.002803 0.007179 0.000279 0.000475 
+Total: 0.093168
+
+unoptimized 1280x720
+Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, Draw
+0.008943 0.023519 0.004569 0.000741 0.000575 0.001294 0.002906 0.005976 0.000251 0.000550 
+Total: 0.048773
+
+unoptimized 640x480
+Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, Draw
+0.003717 0.009551 0.002602 0.000348 0.000283 0.000901 0.002677 0.005417 0.000232 0.000565 
+Total: 0.025728
+
+opencv harris 1920x1080
+0.15s
+
+opencv harris 1280x720
+0.055s
+
+opencv harris 640x480
+0.017s
+
+optimized 1920x1080
+Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, memcpy, Draw
+0.018405 0.028172 0.008251 0.001209 0.000563 0.001036 0.002826 0.006609 0.000351 0.008459 0.000566 
+Total: 0.067420
+
+optimized 1280x720
+Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, memcpy, Draw
+0.008292 0.012732 0.004541 0.000774 0.000658 0.001034 0.002975 0.006444 0.000283 0.005536 0.000582 
+Total: 0.037732
+
+optimized 640x480
+Convolve, Harris, Scan, Collapse, Select Corners, Brief, Dist Matrix, Partial Sort Prefs, Marriage, memcpy, Draw
+0.003939 0.006702 0.002801 0.000373 0.000332 0.000952 0.003915 0.006204 0.000252 0.003158 0.000530 
+Total: 0.025470
+
+
+

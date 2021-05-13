@@ -1,0 +1,1 @@
+g++ -O3 -Wall -I/usr/include/opencv4 -I/usr/local/cuda-10.2/include -fopenmp main_opencv.cpp -L/usr/lib -lopencv_core -lopencv_highgui -lopencv_videoio -L/usr/local/cuda-10.2/lib64 -lcudart -lopencv_imgproc -o opencv_harris
